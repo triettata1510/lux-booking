@@ -1,18 +1,11 @@
-import { NextResponse } from "next/server";
+// app/api/admin/technicians/[id]/route.ts
+import { NextRequest, NextResponse } from "next/server";
 import { supabaseService } from "@/lib/supabaseService";
 
-/**
- * DELETE /api/admin/technicians/:id
- * Xoá technician theo id
- */
-export async function DELETE(
-  _req: Request,
-  { params }: { params: { id: string } }
-) {
-  const id = params?.id;
-  if (!id) {
-    return NextResponse.json({ error: "Missing id" }, { status: 400 });
-  }
+type RouteParams = Promise<{ id: string }>;
+
+export async function DELETE(_req: NextRequest, ctx: { params: RouteParams }) {
+  const { id } = await ctx.params;
 
   const { error } = await supabaseService
     .from("technicians")
@@ -22,6 +15,5 @@ export async function DELETE(
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
-
   return NextResponse.json({ ok: true });
 }
