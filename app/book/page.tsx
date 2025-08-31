@@ -11,6 +11,39 @@ type Service = {
 };
 type Slot = { start: string; end: string };
 
+// Toast DOM thuần – luôn hiển thị được kể cả khi Tailwind/React trục trặc
+function showToast(text: string, ok = true) {
+  try {
+    let el = document.getElementById("lux-toast") as HTMLDivElement | null;
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "lux-toast";
+      Object.assign(el.style, {
+        position: "fixed",
+        top: "12px",
+        right: "12px",
+        zIndex: "99999",
+        padding: "12px 16px",
+        borderRadius: "10px",
+        background: ok ? "#ecfdf5" : "#fef2f2",
+        color: ok ? "#065f46" : "#991b1b",
+        boxShadow: "0 6px 20px rgba(0,0,0,.15)",
+        fontWeight: "600",
+        fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, sans-serif",
+        border: ok ? "1px solid #34d399" : "1px solid #f87171",
+        maxWidth: "80vw",
+      } as CSSStyleDeclaration);
+      document.body.appendChild(el);
+    }
+    el.textContent = text;
+    el.style.display = "block";
+    // ẩn sau 5s
+    window.setTimeout(() => {
+      if (el) el.style.display = "none";
+    }, 5000);
+  } catch {}
+}
+
 export default function BookPage() {
   const [services, setServices] = useState<Service[]>([]);
   const [serviceId, setServiceId] = useState("");
@@ -20,8 +53,29 @@ export default function BookPage() {
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [loading, setLoading] = useState(false);
-  const [errorMsg, setErrorMsg] = useState<string>("");
+  const [msg, setMsg] = useState<string>("");
 
+  // Đọc “ok” từ URL/localStorage để hiện banner nếu cần
+  useEffect(() => {
+    try {
+      const sp = new URLSearchParams(window.location.search);
+      if (sp.get("ok") === "1") {
+        setMsg("✅ Booking confirmed! We’ll text you a confirmation.");
+        showToast("Booking confirmed!", true);
+        sp.delete("ok");
+        history.replaceState(null, "", `${location.pathname}${sp.toString() ? "?" + sp.toString() : ""}`);
+      } else {
+        const ls = localStorage.getItem("lux_last_booking_ok");
+        if (ls === "1") {
+          setMsg("✅ Booking confirmed! We’ll text you a confirmation.");
+          showToast("Booking confirmed!", true);
+          localStorage.removeItem("lux_last_booking_ok");
+        }
+      }
+    } catch {}
+  }, []);
+
+  // Load services (lọc add-on)
   useEffect(() => {
     (async () => {
       const r = await fetch("/api/services");
@@ -32,6 +86,7 @@ export default function BookPage() {
     })();
   }, []);
 
+  // Load slots theo ngày
   useEffect(() => {
     if (!date) return;
     (async () => {
@@ -42,18 +97,29 @@ export default function BookPage() {
     })();
   }, [date]);
 
+  // Gom theo category
   const grouped = useMemo(() => {
     const g: Record<string, Service[]> = {};
     for (const s of services) (g[s.category] ||= []).push(s);
     return g;
   }, [services]);
 
+  // Auto clear banner
+  useEffect(() => {
+    if (!msg) return;
+    const t = setTimeout(() => setMsg(""), 6000);
+    return () => clearTimeout(t);
+  }, [msg]);
+
   async function submit() {
-    setErrorMsg("");
+    setMsg("⏳ Processing...");
+    showToast("Processing...", true);
     if (!serviceId || !slot || !name || !phone) {
-      setErrorMsg("Please fill all required fields.");
+      setMsg("❌ Please fill all required fields.");
+      showToast("Please fill all required fields.", false);
       return;
     }
+
     setLoading(true);
     try {
       const res = await fetch("/api/bookings", {
@@ -65,20 +131,38 @@ export default function BookPage() {
           customer: { full_name: name, phone },
         }),
       });
+
       const data = await res.json();
       console.log("POST /api/bookings =>", res.status, data);
 
       if (!res.ok || !data?.booking_id) {
-        throw new Error(data?.error || "Booking failed");
+        throw new Error(data?.error || "Booking failed (no booking_id)");
       }
 
-      // ✅ Redirect chắc chắn sang trang thành công
-      window.location.assign(
-        `/book/success?booking_id=${encodeURIComponent(data.booking_id)}`
-      );
-      return;
+      // ✅ Thành công – vừa banner, vừa toast, vừa dự phòng URL/localStorage
+      setMsg("✅ Booking confirmed! We’ll text you a confirmation.");
+      showToast("Booking confirmed!", true);
+      try {
+        localStorage.setItem("lux_last_booking_ok", "1");
+      } catch {}
+      try {
+        const sp = new URLSearchParams(window.location.search);
+        sp.set("ok", "1");
+        history.replaceState(null, "", `${location.pathname}?${sp.toString()}`);
+      } catch {}
+
+      // dọn form
+      setName("");
+      setPhone("");
+      setSlot("");
+      try {
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      } catch {}
     } catch (e: any) {
-      setErrorMsg(e?.message || "Booking failed");
+      console.error(e);
+      const text = "❌ " + (e?.message || "Booking failed");
+      setMsg(text);
+      showToast(text, false);
     } finally {
       setLoading(false);
     }
@@ -88,12 +172,25 @@ export default function BookPage() {
     <main className="mx-auto max-w-2xl p-6 space-y-6">
       <h1 className="text-3xl font-semibold">Book an Appointment</h1>
 
-      {errorMsg && (
-        <div className="rounded border border-red-500 bg-red-50 text-red-800 p-3">
-          ❌ {errorMsg}
+      {/* Banner trạng thái */}
+      {msg && (
+        <div
+          id="booking-status"
+          className={`rounded border p-4 text-base font-medium ${
+            msg.startsWith("✅")
+              ? "border-green-500 bg-green-50 text-green-800"
+              : msg.startsWith("⏳")
+              ? "border-blue-400 bg-blue-50 text-blue-800"
+              : "border-red-500 bg-red-50 text-red-800"
+          }`}
+          role="status"
+          aria-live="polite"
+        >
+          {msg}
         </div>
       )}
 
+      {/* Service */}
       <div className="space-y-2">
         <label className="block text-sm font-medium">Service *</label>
         <select
@@ -113,6 +210,7 @@ export default function BookPage() {
         </select>
       </div>
 
+      {/* Date & Time */}
       <div className="grid grid-cols-2 gap-4">
         <div>
           <label className="block text-sm font-medium">Date *</label>
@@ -133,10 +231,7 @@ export default function BookPage() {
             <option value="">Select a time</option>
             {slots.map((s, i) => {
               const t = new Date(s.start);
-              const label = t.toLocaleTimeString([], {
-                hour: "numeric",
-                minute: "2-digit",
-              });
+              const label = t.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
               return (
                 <option key={i} value={s.start}>
                   {label}
@@ -147,6 +242,7 @@ export default function BookPage() {
         </div>
       </div>
 
+      {/* Customer */}
       <div className="grid grid-cols-2 gap-4">
         <div>
           <label className="block text-sm font-medium">Full name *</label>

@@ -1,138 +1,211 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
-type Row = { id:string; start_at:string; end_at:string; status:string; service_name:string; customer_name:string; customer_phone:string; technician_name:string|null };
-type Tech = { id:string; full_name:string; phone:string|null; is_active:boolean };
-type Hours = { dow:number; open_time:string; close_time:string };
-const DOW = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+type BookingRow = {
+  id: string;
+  start_at: string;
+  end_at: string;
+  status: "pending" | "confirmed" | "cancelled";
+  service_name: string;
+  customer_name: string;
+  customer_phone: string;
+  technician_name: string | null;
+};
 
-// helper: luôn trả về mảng (hoặc []) nếu API lỗi
-async function j<T=any>(url: string): Promise<T|[]> {
-  try {
-    const r = await fetch(url);
-    if (!r.ok) return [];
-    return await r.json();
-  } catch { return []; }
-}
+type WorkingHour = { dow: number; open_time: string; close_time: string };
+
+const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
 
 export default function AdminPage() {
-  const [date, setDate] = useState<string>(new Date().toISOString().slice(0,10));
-  const [rows, setRows] = useState<Row[]>([]);
-  const [techs, setTechs] = useState<Tech[]>([]);
-  const [hours, setHours] = useState<Hours[]>([]);
-  const [newTech, setNewTech] = useState({ name:"", phone:"" });
+  const [date, setDate] = useState<string>(new Date().toISOString().slice(0, 10));
+  const [bookings, setBookings] = useState<BookingRow[]>([]);
+  const [techName, setTechName] = useState("");
+  const [techPhone, setTechPhone] = useState("");
+  const [hours, setHours] = useState<WorkingHour[]>(
+    Array.from({ length: 7 }, (_, i) => ({
+      dow: i,
+      open_time: "08:00:00",
+      close_time: "19:00:00",
+    }))
+  );
   const [msg, setMsg] = useState("");
 
-  async function loadAll() {
-    const [b, t, h] = await Promise.all([
-      j<Row[]>(`/api/admin/bookings?date=${date}`),
-      j<Tech[]>(`/api/admin/technicians`),
-      j<Hours[]>(`/api/admin/working-hours`),
-    ]);
-    setRows((b as Row[]) || []);
-    setTechs((t as Tech[]) || []);
-    setHours((h as Hours[]) || []);
-  }
-  useEffect(()=>{ loadAll(); }, [date]);
+  const loadBookings = useCallback(async () => {
+    const res = await fetch("/api/admin/bookings");
+    const data: BookingRow[] = await res.json();
+    // Nếu bạn muốn lọc theo ngày hiện tại:
+    const dayOnly = data.filter((b) => b.start_at.startsWith(date));
+    setBookings(dayOnly);
+  }, [date]);
 
-  async function addTech() {
+  const loadHours = useCallback(async () => {
+    const res = await fetch("/api/admin/working-hours");
+    const data: WorkingHour[] = await res.json();
+    if (Array.isArray(data) && data.length) {
+      // merge vào state mặc định theo dow
+      setHours((prev) =>
+        prev.map((h) => data.find((d) => d.dow === h.dow) ?? h)
+      );
+    }
+  }, []);
+
+  const loadAll = useCallback(async () => {
+    await Promise.all([loadBookings(), loadHours()]);
+  }, [loadBookings, loadHours]);
+
+  useEffect(() => {
+    loadAll();
+  }, [loadAll]);
+
+  const addTech = useCallback(async () => {
     setMsg("");
-    if (!newTech.name) return setMsg("Name is required");
-    const res = await fetch(`/api/admin/technicians`, {
-      method:"POST", headers:{ "Content-Type":"application/json" },
-      body: JSON.stringify({ full_name:newTech.name, phone:newTech.phone||null })
+    if (!techName.trim()) {
+      setMsg("Enter technician full name");
+      return;
+    }
+    const res = await fetch("/api/admin/technicians", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        full_name: techName.trim(),
+        phone: techPhone.trim() || null,
+        is_active: true,
+      }),
     });
-    if (!res.ok) { setMsg("Failed to add"); return; }
-    setNewTech({ name:"", phone:"" }); loadAll();
-  }
-  async function delTech(id:string) { await fetch(`/api/admin/technicians/${id}`, { method:"DELETE" }); loadAll(); }
-  async function saveHours() {
-    const body = hours.map(h=>({ dow:h.dow, open_time:h.open_time, close_time:h.close_time }));
-    const res = await fetch(`/api/admin/working-hours`, { method:"PUT", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(body) });
-    setMsg(res.ok ? "Saved hours ✔" : "Save hours failed");
-  }
+    if (!res.ok) {
+      const e = await res.json().catch(() => null);
+      setMsg(e?.error || "Failed to add technician");
+      return;
+    }
+    setTechName("");
+    setTechPhone("");
+    setMsg("Technician added");
+  }, [techName, techPhone]);
+
+  const saveHours = useCallback(async () => {
+    setMsg("");
+    const res = await fetch("/api/admin/working-hours", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ hours }),
+    });
+    if (!res.ok) {
+      const e = await res.json().catch(() => null);
+      setMsg(e?.error || "Failed to save working hours");
+      return;
+    }
+    setMsg("Working hours saved");
+  }, [hours]);
+
+  const rows = useMemo(() => {
+    return bookings.map((b) => ({
+      ...b,
+      timeLabel: new Date(b.start_at).toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+      }),
+    }));
+  }, [bookings]);
 
   return (
-    <main className="mx-auto max-w-5xl p-6 space-y-8">
+    <main className="mx-auto max-w-4xl p-6 space-y-6">
       <h1 className="text-3xl font-semibold">Admin — Lux Spa Nails</h1>
 
-      <section className="space-y-3">
-        <div className="flex items-end gap-3">
-          <div>
-            <label className="text-sm font-medium">Date</label>
-            <input type="date" value={date} onChange={e=>setDate(e.target.value)} className="border rounded p-2 ml-2" />
-          </div>
-          {!!msg && <span className="text-sm">{msg}</span>}
+      <div className="flex items-center gap-3">
+        <span>Date</span>
+        <input
+          type="date"
+          value={date}
+          onChange={(e) => setDate(e.target.value)}
+          className="border rounded p-1"
+        />
+      </div>
+
+      <section>
+        <div className="grid grid-cols-[80px_1fr_1fr_1fr_1fr_1fr] gap-2 font-medium">
+          <div>Time</div>
+          <div>Service</div>
+          <div>Customer</div>
+          <div>Phone</div>
+          <div>Technician</div>
+          <div>Status</div>
         </div>
-        <div className="border rounded">
-          <table className="w-full text-sm">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="text-left p-2">Time</th>
-                <th className="text-left p-2">Service</th>
-                <th className="text-left p-2">Customer</th>
-                <th className="text-left p-2">Phone</th>
-                <th className="text-left p-2">Technician</th>
-                <th className="text-left p-2">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r)=>(
-                <tr key={r.id} className="border-t">
-                  <td className="p-2">{new Date(r.start_at).toLocaleTimeString([], { hour:"numeric", minute:"2-digit" })}</td>
-                  <td className="p-2">{r.service_name}</td>
-                  <td className="p-2">{r.customer_name}</td>
-                  <td className="p-2">{r.customer_phone}</td>
-                  <td className="p-2">{r.technician_name || "-"}</td>
-                  <td className="p-2">{r.status}</td>
-                </tr>
-              ))}
-              {!rows.length && <tr><td className="p-2" colSpan={6}>No bookings</td></tr>}
-            </tbody>
-          </table>
+        {rows.length === 0 && <div className="mt-2">No bookings</div>}
+        <div className="divide-y">
+          {rows.map((r) => (
+            <div
+              key={r.id}
+              className="grid grid-cols-[80px_1fr_1fr_1fr_1fr_1fr] gap-2 py-2"
+            >
+              <div>{r.timeLabel}</div>
+              <div>{r.service_name}</div>
+              <div>{r.customer_name}</div>
+              <div>{r.customer_phone}</div>
+              <div>{r.technician_name ?? "-"}</div>
+              <div>{r.status}</div>
+            </div>
+          ))}
         </div>
       </section>
 
-      <section className="grid grid-cols-1 md:grid-cols-2 gap-8">
-        <div className="space-y-3">
-          <h2 className="text-xl font-semibold">Technicians</h2>
-          <div className="flex gap-2">
-            <input className="border rounded p-2 flex-1" placeholder="Full name"
-              value={newTech.name} onChange={e=>setNewTech(s=>({ ...s, name:e.target.value }))} />
-            <input className="border rounded p-2 flex-1" placeholder="Phone (optional)"
-              value={newTech.phone} onChange={e=>setNewTech(s=>({ ...s, phone:e.target.value }))} />
-            <button onClick={addTech} className="px-3 py-2 rounded bg-black text-white">Add</button>
-          </div>
-          <ul className="border rounded divide-y">
-            {techs.map(t=>(
-              <li key={t.id} className="flex items-center justify-between p-2">
-                <div>
-                  <div className="font-medium">{t.full_name}</div>
-                  <div className="text-xs text-gray-500">{t.phone || "-"}</div>
-                </div>
-                <button onClick={()=>delTech(t.id)} className="text-red-600 text-sm">Delete</button>
-              </li>
-            ))}
-            {!techs.length && <li className="p-2 text-sm">No technicians</li>}
-          </ul>
-        </div>
-
-        <div className="space-y-3">
-          <h2 className="text-xl font-semibold">Working Hours</h2>
-          <div className="border rounded divide-y">
-            {hours.map((h, idx)=>(
-              <div key={idx} className="grid grid-cols-3 gap-2 items-center p-2">
-                <div>{DOW[h.dow]}</div>
-                <input className="border rounded p-2" value={h.open_time}
-                  onChange={e=>{ const v=[...hours]; v[idx]={...h, open_time:e.target.value}; setHours(v); }} />
-                <input className="border rounded p-2" value={h.close_time}
-                  onChange={e=>{ const v=[...hours]; v[idx]={...h, close_time:e.target.value}; setHours(v); }} />
-              </div>
-            ))}
-          </div>
-          <button onClick={saveHours} className="px-3 py-2 rounded bg-black text-white">Save Hours</button>
+      <section className="space-y-2">
+        <h2 className="text-xl font-semibold">Technicians</h2>
+        <div className="flex gap-2">
+          <input
+            placeholder="Full name"
+            value={techName}
+            onChange={(e) => setTechName(e.target.value)}
+            className="border rounded p-2 flex-1"
+          />
+          <input
+            placeholder="Phone (optional)"
+            value={techPhone}
+            onChange={(e) => setTechPhone(e.target.value)}
+            className="border rounded p-2 flex-1"
+          />
+          <button
+            onClick={addTech}
+            className="px-3 py-2 rounded bg-black text-white"
+          >
+            Add
+          </button>
         </div>
       </section>
+
+      <section className="space-y-2">
+        <h2 className="text-xl font-semibold">Working Hours</h2>
+        <div className="grid gap-2">
+          {hours.map((h, idx) => (
+            <div key={h.dow} className="flex items-center gap-2">
+              <div className="w-10">{DOW[h.dow]}</div>
+              <input
+                className="border rounded p-1"
+                value={h.open_time}
+                onChange={(e) => {
+                  const v = [...hours];
+                  v[idx] = { ...h, open_time: e.target.value };
+                  setHours(v);
+                }}
+              />
+              <span>→</span>
+              <input
+                className="border rounded p-1"
+                value={h.close_time}
+                onChange={(e) => {
+                  const v = [...hours];
+                  v[idx] = { ...h, close_time: e.target.value };
+                  setHours(v);
+                }}
+              />
+            </div>
+          ))}
+        </div>
+        <button onClick={saveHours} className="px-3 py-2 rounded bg-black text-white">
+          Save Hours
+        </button>
+      </section>
+
+      {!!msg && <p className="text-sm">{msg}</p>}
     </main>
   );
 }
