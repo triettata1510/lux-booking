@@ -91,7 +91,14 @@ export async function POST(req: NextRequest) {
   try {
     const from = process.env.VONAGE_FROM || "";
     if (from && process.env.VONAGE_API_KEY && process.env.VONAGE_API_SECRET) {
-      const toUser = customer.phone!.replace(/\D/g, "");
+      let toUser = customer.phone.replace(/\D/g,"");
+
+// Nếu khách chỉ nhập 9 hoặc 10 số, tự thêm +1 ở đầu (giả định Mỹ)
+if (toUser.length === 9 || toUser.length === 10) {
+  toUser = "1" + toUser;
+}
+
+toUser = "+" + toUser; // chuẩn E.164
       const when = start.toLocaleString("en-US", {
         hour: "numeric",
         minute: "2-digit",
