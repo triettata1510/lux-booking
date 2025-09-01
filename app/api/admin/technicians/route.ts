@@ -1,4 +1,3 @@
-// app/api/admin/technicians/route.ts
 import { NextResponse } from "next/server";
 import { supabaseService } from "@/lib/supabaseService";
 
@@ -21,6 +20,16 @@ type OutTech = {
   is_active: boolean;
 };
 
+function toOutTech(t: RawTech): OutTech {
+  const nm = (t.full_name ?? t.name ?? "").trim();
+  return {
+    id: t.id,
+    full_name: nm,
+    phone: t.phone ?? null,
+    is_active: Boolean(t.is_active),
+  };
+}
+
 // GET: danh sách technicians (cho Admin)
 export async function GET() {
   const { data, error } = await supabaseService
@@ -31,13 +40,7 @@ export async function GET() {
 
   if (error) return httpError(error.message, 500);
 
-  const list = (data ?? []).map((t: RawTech): OutTech => ({
-    id: t.id,
-    full_name: (t.full_name ?? t.name ?? "").trim(),
-    phone: t.phone ?? null,
-    is_active: Boolean(t.is_active),
-  }));
-
+  const list: OutTech[] = (data ?? []).map(toOutTech);
   return NextResponse.json(list);
 }
 
@@ -46,14 +49,14 @@ export async function POST(req: Request) {
   const body = (await req.json().catch(() => null)) as
     | { full_name?: string; phone?: string | null }
     | null;
-  if (!body?.full_name || !body.full_name.trim()) {
-    return httpError("Missing full_name");
-  }
+
+  const full = body?.full_name?.trim();
+  if (!full) return httpError("Missing full_name");
 
   const row = {
-    full_name: body.full_name.trim(),
-    name: body.full_name.trim(),
-    phone: body.phone ?? null,
+    full_name: full,
+    name: full, // giữ đồng bộ nếu DB có cột name
+    phone: body?.phone ?? null,
     is_active: true,
   };
 
@@ -65,13 +68,6 @@ export async function POST(req: Request) {
 
   if (error) return httpError(error.message, 500);
 
-  const t = data as RawTech;
-  const out: OutTech = {
-    id: t.id,
-    full_name: (t.full_name ?? t.name ?? "").trim(),
-    phone: t.phone ?? null,
-    is_active: Boolean(t.is_active),
-  };
-
+  const out = toOutTech(data as RawTech);
   return NextResponse.json(out);
 }

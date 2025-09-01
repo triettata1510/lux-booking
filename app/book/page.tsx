@@ -13,6 +13,13 @@ type Service = {
 type Slot = { start: string; end: string };
 type Tech = { id: string; full_name: string; phone?: string | null };
 
+type BookingPayload = {
+  service_id: string;
+  start_at: string;
+  customer: { full_name: string; phone: string };
+  technician_id?: string;
+};
+
 export default function BookPage() {
   const router = useRouter();
   const [services, setServices] = useState<Service[]>([]);
@@ -29,7 +36,6 @@ export default function BookPage() {
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState<string>("");
 
-  // load services
   useEffect(() => {
     fetch("/api/services")
       .then((r) => r.json())
@@ -39,21 +45,18 @@ export default function BookPage() {
       });
   }, []);
 
-  // load technicians (active)
+  // NOTE: hiện tại endpoint public đang là /api/technician (singular)
   useEffect(() => {
-    fetch("/api/technicians")
+    fetch("/api/technician")
       .then((r) => r.json())
-      .then((d: Tech[]) => {
-        setTechs(d || []);
-      });
+      .then((d: Tech[]) => setTechs(d || []));
   }, []);
 
-  // load slots theo ngày
   useEffect(() => {
     if (!date) return;
     fetch(`/api/availability?date=${date}`)
       .then((r) => r.json())
-      .then((d) => {
+      .then((d: { slots?: Slot[] }) => {
         setSlots(d?.slots ?? []);
         setSlot("");
       });
@@ -76,7 +79,7 @@ export default function BookPage() {
     }
     setLoading(true);
     try {
-      const payload: any = {
+      const payload: BookingPayload = {
         service_id: serviceId,
         start_at: slot,
         customer: { full_name: name, phone },
@@ -88,11 +91,13 @@ export default function BookPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      const data = await res.json();
+      const data: { ok?: boolean; booking_id?: string; error?: string } =
+        await res.json();
       if (!res.ok) throw new Error(data?.error || "Booking failed");
       router.push(`/book/success`);
-    } catch (e: any) {
-      setMsg("❌ " + (e?.message || "Booking failed"));
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Booking failed";
+      setMsg("❌ " + message);
     } finally {
       setLoading(false);
     }
