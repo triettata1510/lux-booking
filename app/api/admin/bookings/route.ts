@@ -1,77 +1,72 @@
-import { NextResponse } from "next/server";
-import { supabaseService } from "@/lib/supabaseService";
+// app/api/admin/bookings/route.ts
+import { NextRequest, NextResponse } from "next/server";
+import { supabase } from "@/lib/supabaseClient";
 
-// Các hàng tối thiểu dùng để build map
-type ServiceRow = { id: string; name: string };
-type CustomerRow = { id: string; full_name: string; phone: string };
-type TechnicianRow = { id: string; full_name: string };
+function httpError(msg: string, code = 400) {
+  return NextResponse.json({ error: msg }, { status: code });
+}
 
-// Hàng booking “thô” lấy từ DB (chỉ các trường cần thiết)
-type BookingRaw = {
-  id: string;
-  service_id: string;
-  customer_id: string;
-  technician_id: string | null;
-  start_at: string;
-  end_at: string;
-  status: "pending" | "confirmed" | "cancelled";
-};
+// Đảm bảo không cache ở Edge/CDN
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
-// Dòng đã “giải mã” tên, số điện thoại để hiển thị
-export type BookingRow = {
-  id: string;
-  start_at: string;
-  end_at: string;
-  status: "pending" | "confirmed" | "cancelled";
-  service_name: string;
-  customer_name: string;
-  customer_phone: string;
-  technician_name: string | null;
-};
+export async function GET(req: NextRequest) {
+  try {
+    const { searchParams } = new URL(req.url);
+    const date = searchParams.get("date"); // "2025-09-01"
 
-export async function GET() {
-  // Lấy danh mục để build map id->name
-  const [svc, cus, tech] = await Promise.all([
-    supabaseService.from("services").select("id,name"),
-    supabaseService.from("customers").select("id,full_name,phone"),
-    supabaseService.from("technicians").select("id,full_name"),
-  ]);
+    if (!date) return httpError("Missing ?date=YYYY-MM-DD");
 
-  if (svc.error) return NextResponse.json({ error: svc.error.message }, { status: 500 });
-  if (cus.error) return NextResponse.json({ error: cus.error.message }, { status: 500 });
-  if (tech.error) return NextResponse.json({ error: tech.error.message }, { status: 500 });
+    // Lấy TIMEZONE từ env (mặc định America/Chicago)
+    const tz = process.env.TIMEZONE || "America/Chicago";
 
-  const sMap = Object.fromEntries(
-    ((svc.data as ServiceRow[]) || []).map((s) => [s.id, s.name])
-  );
-  const cMapName = Object.fromEntries(
-    ((cus.data as CustomerRow[]) || []).map((c) => [c.id, c.full_name])
-  );
-  const cMapPhone = Object.fromEntries(
-    ((cus.data as CustomerRow[]) || []).map((c) => [c.id, c.phone])
-  );
-  const tMap = Object.fromEntries(
-    ((tech.data as TechnicianRow[]) || []).map((t) => [t.id, t.full_name])
-  );
+    // Tạo khoảng thời gian theo timezone (ngày đó từ 00:00:00 -> 23:59:59)
+    // Supabase/Postgres lưu UTC => so sánh bằng ISO UTC theo start_of_day/end_of_day tz
+    const day = new Date(`${date}T00:00:00`);
+    // chuyển mốc tz -> UTC bằng trick lấy offset tz theo Intl
+    const fmt = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    });
 
-  // Lấy danh sách booking (hôm nay trở đi hoặc theo phạm vi bạn muốn)
-  const { data: bookings, error: bErr } = await supabaseService
-    .from("bookings")
-    .select("id, service_id, customer_id, technician_id, start_at, end_at, status")
-    .order("start_at", { ascending: true });
+    const toUTCISO = (d: Date) => new Date(
+      // parse lại theo tz -> get UTC ISO
+      Date.parse(
+        new Date(
+          fmt.format(d)
+            .replace(/(\d+)\/(\d+)\/(\d+), /, "$3-$1-$2T") // MM/DD/YYYY, -> YYYY-MM-DDT
+        ).toISOString()
+      )
+    ).toISOString();
 
-  if (bErr) return NextResponse.json({ error: bErr.message }, { status: 500 });
+    const start = toUTCISO(day);
+    const end = toUTCISO(new Date(day.getTime() + 24 * 60 * 60 * 1000 - 1));
 
-  const out: BookingRow[] = ((bookings ?? []) as BookingRaw[]).map((b) => ({
-    id: b.id,
-    start_at: b.start_at,
-    end_at: b.end_at,
-    status: b.status,
-    service_name: sMap[b.service_id] ?? "",
-    customer_name: cMapName[b.customer_id] ?? "",
-    customer_phone: cMapPhone[b.customer_id] ?? "",
-    technician_name: b.technician_id ? tMap[b.technician_id] ?? null : null,
-  }));
+    // Query: lấy bookings trong [start, end] kèm join thông tin
+    const { data, error } = await supabase
+      .from("bookings")
+      .select(`
+        id,
+        start_at,
+        status,
+        services:service_id(name),
+        customers:customer_id(full_name, phone),
+        technicians:technician_id(full_name)
+      `)
+      .gte("start_at", start)
+      .lte("start_at", end)
+      .order("start_at", { ascending: true });
 
-  return NextResponse.json(out);
+    if (error) return httpError(error.message, 500);
+
+    return NextResponse.json({ ok: true, items: data ?? [] }, { headers: { "Cache-Control": "no-store" } });
+  } catch (e: any) {
+    return httpError(e?.message || "Failed to load bookings", 500);
+  }
 }
