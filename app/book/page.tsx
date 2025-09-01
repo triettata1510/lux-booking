@@ -47,7 +47,7 @@ export default function BookPage() {
 
   // NOTE: hiện tại endpoint public đang là /api/technician (singular)
   useEffect(() => {
-    fetch("/api/technician")
+    fetch("/api/technicians")
       .then((r) => r.json())
       .then((d: Tech[]) => setTechs(d || []));
   }, []);
