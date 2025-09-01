@@ -1,20 +1,35 @@
+// app/api/admin/bookings/route.ts
 import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
 import { supabaseService } from "@/lib/supabaseService";
 
-type DbRow = {
+/** Query: ?date=YYYY-MM-DD */
+const Query = z.object({
+  date: z.string().min(10, "date is required (YYYY-MM-DD)"),
+});
+
+/** Các cột cơ bản của bảng bookings (flatten) */
+type BookingRow = {
   id: string;
-  start_at: string;                  // ISO
-  service_name: string;
+  date: string;        // YYYY-MM-DD
+  time: string;        // HH:mm
   customer_name: string;
-  customer_phone: string | null;
-  technician_name: string | null;
+  phone: string | null;
   status: string;
+  service_id?: string;
+  technician_id?: string | null;
 };
 
-type OutRow = {
+/** Kết quả join từ select(...) */
+type BookingJoined = BookingRow & {
+  service: { name: string } | null;
+  technician: { full_name: string } | null;
+};
+
+/** Kiểu item trả về cho UI admin */
+type AdminBookingItem = {
   id: string;
-  start_at: string;
-  time_label: string;
+  time: string;
   service: string;
   customer: string;
   phone: string;
@@ -22,43 +37,47 @@ type OutRow = {
   status: string;
 };
 
-function httpError(msg: string, code = 400) {
-  return NextResponse.json({ error: msg }, { status: code });
-}
-
 export async function GET(req: NextRequest) {
-  const { searchParams } = new URL(req.url);
-  const date = searchParams.get("date");
-  if (!date) return httpError("Missing date");
+  const url = new URL(req.url);
+  const parsed = Query.safeParse({ date: url.searchParams.get("date") ?? "" });
+  if (!parsed.success) {
+    return NextResponse.json({ error: "Invalid date" }, { status: 400 });
+  }
+  const date = parsed.data.date;
 
-  // lọc theo ngày UTC đơn giản; nếu bạn đã có bản TZ-safe thì vẫn OK
-  const from = `${date}T00:00:00.000Z`;
-  const to = `${date}T23:59:59.999Z`;
-
-  // Gợi ý: nếu bạn không có VIEW "bookings_view", thay select(...) bằng join cũ của bạn
   const { data, error } = await supabaseService
-    .from("bookings_view")
-    .select("id,start_at,service_name,customer_name,customer_phone,technician_name,status")
-    .gte("start_at", from)
-    .lte("start_at", to)
-    .order("start_at", { ascending: true });
+    .from("bookings")
+    .select(
+      `
+      id,
+      date,
+      time,
+      customer_name,
+      phone,
+      status,
+      service:services(name),
+      technician:technicians(full_name)
+    `
+    )
+    .eq("date", date)
+    .order("time", { ascending: true });
 
-  if (error) return httpError(error.message, 500);
+  if (error) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
 
-  const rows: OutRow[] = ((data ?? []) as unknown as DbRow[]).map((r) => {
-    const t = new Date(r.start_at);
-    const time_label = t.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    return {
-      id: r.id,
-      start_at: r.start_at,
-      time_label,
-      service: r.service_name,
-      customer: r.customer_name,
-      phone: r.customer_phone ?? "",
-      technician: r.technician_name,
-      status: r.status,
-    };
-  });
+  // Ép kiểu rõ ràng cho mảng rows
+  const rows: BookingJoined[] = (data ?? []) as unknown as BookingJoined[];
 
-  return NextResponse.json({ rows });
+  const items: AdminBookingItem[] = rows.map((r) => ({
+    id: r.id,
+    time: r.time,
+    service: r.service?.name ?? "",
+    customer: r.customer_name,
+    phone: r.phone ?? "",
+    technician: r.technician?.full_name ?? null,
+    status: r.status,
+  }));
+
+  return NextResponse.json({ items });
 }
