@@ -40,7 +40,7 @@ export async function GET() {
 
   if (error) return httpError(error.message, 500);
 
-  const list: OutTech[] = (data ?? []).map(toOutTech);
+  const list: OutTech[] = ((data ?? []) as RawTech[]).map(toOutTech);
   return NextResponse.json(list);
 }
 
@@ -55,7 +55,7 @@ export async function POST(req: Request) {
 
   const row = {
     full_name: full,
-    name: full, // giữ đồng bộ nếu DB có cột name
+    name: full, // đồng bộ nếu DB có cột name
     phone: body?.phone ?? null,
     is_active: true,
   };

@@ -45,7 +45,6 @@ export default function BookPage() {
       });
   }, []);
 
-  // NOTE: hiện tại endpoint public đang là /api/technician (singular)
   useEffect(() => {
     fetch("/api/technicians")
       .then((r) => r.json())
@@ -161,9 +160,7 @@ export default function BookPage() {
       </div>
 
       <div className="space-y-2">
-        <label className="block text-sm font-medium">
-          Technician (optional)
-        </label>
+        <label className="block text-sm font-medium">Technician (optional)</label>
         <select
           value={technicianId}
           onChange={(e) => setTechnicianId(e.target.value)}

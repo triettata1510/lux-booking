@@ -32,8 +32,8 @@ export async function GET() {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  const out = (data ?? [])
-    .map((t) => toPublicTech(t as RawTech))
+  const out: OutTech[] = ((data ?? []) as RawTech[])
+    .map(toPublicTech)
     .filter((t): t is OutTech => t !== null);
 
   return NextResponse.json(out);
