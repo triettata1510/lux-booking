@@ -1,5 +1,4 @@
 "use client";
-
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
@@ -11,21 +10,26 @@ type Service = {
   duration_min: number;
   is_addon: boolean;
 };
-
 type Slot = { start: string; end: string };
+type Tech = { id: string; full_name: string; phone?: string | null };
 
 export default function BookPage() {
   const router = useRouter();
   const [services, setServices] = useState<Service[]>([]);
+  const [techs, setTechs] = useState<Tech[]>([]);
   const [serviceId, setServiceId] = useState("");
-  const [date, setDate] = useState<string>(new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState<string>(
+    new Date().toISOString().slice(0, 10)
+  );
   const [slots, setSlots] = useState<Slot[]>([]);
   const [slot, setSlot] = useState("");
+  const [technicianId, setTechnicianId] = useState<string>("");
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState<string>("");
 
+  // load services
   useEffect(() => {
     fetch("/api/services")
       .then((r) => r.json())
@@ -35,11 +39,21 @@ export default function BookPage() {
       });
   }, []);
 
+  // load technicians (active)
+  useEffect(() => {
+    fetch("/api/technicians")
+      .then((r) => r.json())
+      .then((d: Tech[]) => {
+        setTechs(d || []);
+      });
+  }, []);
+
+  // load slots theo ngày
   useEffect(() => {
     if (!date) return;
     fetch(`/api/availability?date=${date}`)
       .then((r) => r.json())
-      .then((d: { date?: string; slots?: Slot[] }) => {
+      .then((d) => {
         setSlots(d?.slots ?? []);
         setSlot("");
       });
@@ -62,22 +76,23 @@ export default function BookPage() {
     }
     setLoading(true);
     try {
+      const payload: any = {
+        service_id: serviceId,
+        start_at: slot,
+        customer: { full_name: name, phone },
+      };
+      if (technicianId) payload.technician_id = technicianId;
+
       const res = await fetch("/api/bookings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          service_id: serviceId,
-          start_at: slot,
-          customer: { full_name: name, phone },
-        }),
+        body: JSON.stringify(payload),
       });
-      const data: { ok?: boolean; booking_id?: string; error?: string } = await res.json();
+      const data = await res.json();
       if (!res.ok) throw new Error(data?.error || "Booking failed");
-      // Chuyển sang trang thông báo thành công (không cần hiện booking_id nếu bạn đã bỏ trên trang success)
-      router.push("/book/success");
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : "Booking failed";
-      setMsg("❌ " + message);
+      router.push(`/book/success`);
+    } catch (e: any) {
+      setMsg("❌ " + (e?.message || "Booking failed"));
     } finally {
       setLoading(false);
     }
@@ -140,6 +155,24 @@ export default function BookPage() {
         </div>
       </div>
 
+      <div className="space-y-2">
+        <label className="block text-sm font-medium">
+          Technician (optional)
+        </label>
+        <select
+          value={technicianId}
+          onChange={(e) => setTechnicianId(e.target.value)}
+          className="w-full border rounded p-2"
+        >
+          <option value="">No preference</option>
+          {techs.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.full_name}
+            </option>
+          ))}
+        </select>
+      </div>
+
       <div className="grid grid-cols-2 gap-4">
         <div>
           <label className="block text-sm font-medium">Full name *</label>
@@ -156,7 +189,7 @@ export default function BookPage() {
             value={phone}
             onChange={(e) => setPhone(e.target.value)}
             className="w-full border rounded p-2"
-            placeholder="1XXXXXXXXXX"
+            placeholder="9–10 digits"
           />
         </div>
       </div>
