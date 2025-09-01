@@ -12,7 +12,6 @@ type Service = {
 };
 
 type Slot = { start: string; end: string };
-
 type Tech = { id: string; full_name: string };
 
 export default function BookPage() {
@@ -32,42 +31,44 @@ export default function BookPage() {
 
   useEffect(() => {
     (async () => {
-      const res = await fetch("/api/services");
-      const data = (await res.json()) as Service[];
-      setServices(data);
-      if (data?.length) setServiceId(data[0].id);
+      const r = await fetch("/api/services");
+      const d: Service[] = await r.json();
+      setServices(d);
+      if (d?.length) setServiceId(d[0].id);
     })();
   }, []);
 
   useEffect(() => {
     if (!date) return;
     (async () => {
-      const res = await fetch(`/api/availability?date=${date}`);
-      const data = (await res.json()) as { slots: Slot[] };
-      setSlots(data?.slots ?? []);
+      const r = await fetch(`/api/availability?date=${encodeURIComponent(date)}`);
+      const d: { slots: Slot[] } = await r.json();
+      setSlots(d?.slots ?? []);
       setSlot("");
+      setTechId("");
     })();
   }, [date]);
 
-  // tải danh sách thợ (active)
-  useEffect(() => {
-    (async () => {
-      const res = await fetch("/api/technicians");
-      const data = (await res.json()) as { technicians: Tech[] };
-      setTechs(data.technicians ?? []);
-    })();
-  }, []);
-
-  // Khi chọn slot, lọc thợ available ở giờ đó
+  // tải thợ rảnh khi chọn slot
   useEffect(() => {
     (async () => {
       if (!slot) return;
-      const res = await fetch(`/api/technicians/available?start=${encodeURIComponent(slot)}`);
-      const data = (await res.json()) as { technicians: Tech[] };
-      setTechs(data.technicians ?? []);
-      setTechId(""); // reset chọn
+      const r = await fetch(`/api/technicians/available?start=${encodeURIComponent(slot)}`);
+      const d: { technicians: Tech[] } = await r.json();
+      setTechs(d?.technicians ?? []);
+      setTechId("");
     })();
   }, [slot]);
+
+  // tải tất cả thợ (lần đầu, trước khi chọn slot)
+  useEffect(() => {
+    (async () => {
+      const r = await fetch("/api/technicians");
+      if (!r.ok) return;
+      const j: { technicians?: Tech[]; items?: Tech[] } = await r.json();
+      setTechs((j.technicians ?? j.items) ?? []);
+    })();
+  }, []);
 
   const grouped = useMemo(() => {
     const g: Record<string, Service[]> = {};
@@ -96,12 +97,12 @@ export default function BookPage() {
           customer: { full_name: name, phone },
         }),
       });
-      const data = (await res.json()) as { ok?: boolean; booking_id?: string; error?: string };
+      const data: { ok?: boolean; booking_id?: string; error?: string } = await res.json();
       if (!res.ok) throw new Error(data?.error || "Booking failed");
-      router.push(`/book/success`);
+      router.push("/book/success");
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : "Booking failed";
-      setMsg("❌ " + message);
+      const msg = err instanceof Error ? err.message : "Booking failed";
+      setMsg("❌ " + msg);
     } finally {
       setLoading(false);
     }
@@ -177,10 +178,6 @@ export default function BookPage() {
         </select>
       </div>
 
-      <p className="text-xs text-gray-600">
-        If you pick a technician, we’ll confirm if they’re free. Otherwise we’ll choose someone available.
-      </p>
-
       <div className="grid grid-cols-2 gap-4">
         <div>
           <label className="block text-sm font-medium">Full name *</label>
@@ -197,7 +194,7 @@ export default function BookPage() {
             value={phone}
             onChange={(e) => setPhone(e.target.value)}
             className="w-full border rounded p-2"
-            placeholder="e.g. 999333222"
+            placeholder="e.g. 9993332222"
           />
         </div>
       </div>
