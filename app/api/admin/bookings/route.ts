@@ -1,57 +1,52 @@
-// app/api/admin/bookings/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { supabase } from "@/lib/supabaseClient";
+import { supabaseService } from "@/lib/supabaseService";
 
-const TZ = process.env.TIMEZONE || "America/Chicago";
-const err = (m: string, code = 400) =>
-  NextResponse.json({ error: m }, { status: code });
+type Row = {
+  id: string;
+  start_at: string;
+  service: string;
+  customer: string;
+  phone: string;
+  technician: string | null;
+  status: string;
+};
 
-export const dynamic = "force-dynamic";
-export const revalidate = 0;
-
-// Trả về yyyy-mm-dd theo múi giờ TZ
-function ymdInTz(d: Date, tz: string) {
-  return d.toLocaleDateString("en-CA", { timeZone: tz });
+function httpError(msg: string, code = 400) {
+  return NextResponse.json({ error: msg }, { status: code });
 }
 
 export async function GET(req: NextRequest) {
-  try {
-    const { searchParams } = new URL(req.url);
-    const date = searchParams.get("date"); // "2025-09-01"
-    if (!date) return err("Missing ?date=YYYY-MM-DD");
+  const { searchParams } = new URL(req.url);
+  const date = searchParams.get("date");
+  if (!date) return httpError("Missing date");
 
-    // Lấy khung rộng (48h) quanh ngày để tránh lệch TZ
-    const baseUtc = new Date(`${date}T00:00:00.000Z`);
-    const startUtc = new Date(baseUtc.getTime() - 12 * 3600_000).toISOString(); // -12h
-    const endUtc   = new Date(baseUtc.getTime() + 36 * 3600_000).toISOString(); // +36h
+  const from = `${date}T00:00:00`;
+  const to = `${date}T23:59:59`;
 
-    const { data, error } = await supabase
-      .from("bookings")
-      .select(`
-        id,
-        start_at,
-        status,
-        services:service_id(name),
-        customers:customer_id(full_name, phone),
-        technicians:technician_id(full_name)
-      `)
-      .gte("start_at", startUtc)
-      .lte("start_at", endUtc)
-      .order("start_at", { ascending: true });
+  const { data, error } = await supabaseService
+    .from("bookings_view") // hoặc join thủ công nếu bạn không có view
+    .select("id,start_at,service_name,customer_name,customer_phone,technician_name,status")
+    .gte("start_at", from)
+    .lte("start_at", to)
+    .order("start_at", { ascending: true });
 
-    if (error) return err(error.message, 500);
+  if (error) return httpError(error.message, 500);
 
-    // Lọc lại chính xác theo ngày trong múi giờ cửa hàng
-    const items = (data ?? []).filter((b) => {
-      const d = new Date(b.start_at as string);
-      return ymdInTz(d, TZ) === date;
-    });
+  const rows: Row[] = (data ?? []).map((r: any) => {
+    const start = new Date(r.start_at);
+    const time_label = start.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    return {
+      id: r.id as string,
+      start_at: r.start_at as string,
+      service: r.service_name as string,
+      customer: r.customer_name as string,
+      phone: r.customer_phone as string,
+      technician: (r.technician_name as string) ?? null,
+      status: r.status as string,
+      // phụ để hiển thị: time_label (client có thể tự format, nhưng thêm cho tiện)
+      time_label,
+    };
+  });
 
-    return NextResponse.json(
-      { ok: true, items },
-      { headers: { "Cache-Control": "no-store" } }
-    );
-  } catch (e: any) {
-    return err(e?.message || "Failed to load bookings", 500);
-  }
+  return NextResponse.json({ rows });
 }

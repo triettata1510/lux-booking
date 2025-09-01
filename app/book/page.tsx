@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 
 type Service = {
   id: string;
@@ -11,71 +12,62 @@ type Service = {
 };
 
 type Slot = { start: string; end: string };
-type Technician = { id: string; full_name: string; is_active?: boolean };
+
+type Tech = { id: string; full_name: string };
 
 export default function BookPage() {
+  const router = useRouter();
   const [services, setServices] = useState<Service[]>([]);
   const [serviceId, setServiceId] = useState("");
   const [date, setDate] = useState<string>(new Date().toISOString().slice(0, 10));
   const [slots, setSlots] = useState<Slot[]>([]);
   const [slot, setSlot] = useState("");
-  const [techs, setTechs] = useState<Technician[]>([]);
-  const [technicianId, setTechnicianId] = useState<string>("");
+  const [techs, setTechs] = useState<Tech[]>([]);
+  const [techId, setTechId] = useState<string>("");
 
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState<string>("");
 
-  // load services
   useEffect(() => {
-    fetch("/api/services")
-      .then(r => r.json())
-      .then((d: Service[]) => {
-        setServices(d);
-        if (d?.length) setServiceId(d[0].id);
-      });
+    (async () => {
+      const res = await fetch("/api/services");
+      const data = (await res.json()) as Service[];
+      setServices(data);
+      if (data?.length) setServiceId(data[0].id);
+    })();
   }, []);
 
-  // load slots theo ngày
   useEffect(() => {
     if (!date) return;
-    setSlot("");
-    setTechs([]);
-    setTechnicianId("");
-    fetch(`/api/availability?date=${date}`)
-      .then(r => r.json())
-      .then((d) => setSlots(d?.slots ?? []));
+    (async () => {
+      const res = await fetch(`/api/availability?date=${date}`);
+      const data = (await res.json()) as { slots: Slot[] };
+      setSlots(data?.slots ?? []);
+      setSlot("");
+    })();
   }, [date]);
 
-  // khi chọn slot => lấy technicians rảnh ở giờ đó
+  // tải danh sách thợ (active)
   useEffect(() => {
-    if (!slot) {
-      setTechs([]);
-      setTechnicianId("");
-      return;
-    }
     (async () => {
-      try {
-        const res = await fetch("/api/technicians/available", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ start_at: slot }),
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data?.error || "Failed to load technicians");
-        setTechs(data as Technician[]);
-        // nếu thợ đã chọn không còn trong danh sách rảnh -> reset
-        if (technicianId && !(data as Technician[]).some(t => t.id === technicianId)) {
-          setTechnicianId("");
-        }
-      } catch (e: any) {
-        setTechs([]);
-        setTechnicianId("");
-        console.error(e);
-      }
+      const res = await fetch("/api/technicians");
+      const data = (await res.json()) as { technicians: Tech[] };
+      setTechs(data.technicians ?? []);
     })();
-  }, [slot]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Khi chọn slot, lọc thợ available ở giờ đó
+  useEffect(() => {
+    (async () => {
+      if (!slot) return;
+      const res = await fetch(`/api/technicians/available?start=${encodeURIComponent(slot)}`);
+      const data = (await res.json()) as { technicians: Tech[] };
+      setTechs(data.technicians ?? []);
+      setTechId(""); // reset chọn
+    })();
+  }, [slot]);
 
   const grouped = useMemo(() => {
     const g: Record<string, Service[]> = {};
@@ -100,21 +92,16 @@ export default function BookPage() {
         body: JSON.stringify({
           service_id: serviceId,
           start_at: slot,
-          technician_id: technicianId || null,
+          technician_id: techId || null,
           customer: { full_name: name, phone },
         }),
       });
-      const data = await res.json();
+      const data = (await res.json()) as { ok?: boolean; booking_id?: string; error?: string };
       if (!res.ok) throw new Error(data?.error || "Booking failed");
-      // ở lại trang và báo thành công
-      setMsg("✅ Booking confirmed! We'll text you a confirmation.");
-      setSlot("");
-      setName("");
-      setPhone("");
-      setTechs([]);
-      setTechnicianId("");
-    } catch (e: any) {
-      setMsg("❌ " + (e?.message || "Booking failed"));
+      router.push(`/book/success`);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Booking failed";
+      setMsg("❌ " + message);
     } finally {
       setLoading(false);
     }
@@ -163,10 +150,7 @@ export default function BookPage() {
             <option value="">Select a time</option>
             {slots.map((s, i) => {
               const t = new Date(s.start);
-              const label = t.toLocaleTimeString([], {
-                hour: "numeric",
-                minute: "2-digit",
-              });
+              const label = t.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
               return (
                 <option key={i} value={s.start}>
                   {label}
@@ -178,12 +162,11 @@ export default function BookPage() {
       </div>
 
       <div>
-        <label className="block text-sm font-medium">Technician</label>
+        <label className="block text-sm font-medium">Technician (optional)</label>
         <select
-          value={technicianId}
-          onChange={(e) => setTechnicianId(e.target.value)}
+          value={techId}
+          onChange={(e) => setTechId(e.target.value)}
           className="w-full border rounded p-2"
-          disabled={!slot} // phải chọn giờ trước mới lọc được thợ
         >
           <option value="">Any technician</option>
           {techs.map((t) => (
@@ -193,6 +176,10 @@ export default function BookPage() {
           ))}
         </select>
       </div>
+
+      <p className="text-xs text-gray-600">
+        If you pick a technician, we’ll confirm if they’re free. Otherwise we’ll choose someone available.
+      </p>
 
       <div className="grid grid-cols-2 gap-4">
         <div>
@@ -210,7 +197,7 @@ export default function BookPage() {
             value={phone}
             onChange={(e) => setPhone(e.target.value)}
             className="w-full border rounded p-2"
-            placeholder="e.g. 9993332222"
+            placeholder="e.g. 999333222"
           />
         </div>
       </div>
